@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0b1530">
+<title>Bubble 4096</title>
+<meta name="apple-mobile-web-app-title" content="Bubble 4096">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none;
+    background: #0b1530; color: #eef3ff;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "Segoe UI", Roboto, sans-serif;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  }
+  #app {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column; align-items: center;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background: radial-gradient(120% 80% at 50% 0%, #1d3a7a 0%, #0f1f47 45%, #0b1530 100%);
+  }
+  /* Installed (home-screen) app: iOS can report a viewport shorter than the screen,
+     leaving a dead band at the bottom. Size to the full screen height instead. */
+  @media (display-mode: standalone) {
+    #app {
+      bottom: auto;
+      height: 100vh; height: 100lvh;
+      padding-bottom: max(6px, calc(env(safe-area-inset-bottom) - 14px));
+    }
+  }
+  #hud {
+    width: 100%; max-width: var(--bw, 480px);
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 10px 12px 8px;
+  }
+  .title { font-weight: 800; font-size: 20px; letter-spacing: .5px; line-height: 1; }
+  .title small { display: block; font-size: 11px; font-weight: 600; opacity: .6; letter-spacing: 1px; margin-top: 3px; }
+  .stats { display: flex; gap: 6px; }
+  .stat {
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);
+    border-radius: 12px; padding: 5px 10px; min-width: 64px; text-align: center;
+  }
+  .stat b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; opacity: .65; }
+  .btn {
+    appearance: none; border: 0; cursor: pointer; color: #0b1530; font-weight: 700;
+    background: #eef3ff; border-radius: 12px; padding: 8px 12px; font-size: 15px; font-family: inherit;
+  }
+  .btn.ghost { background: rgba(255,255,255,.1); color: #eef3ff; border: 1px solid rgba(255,255,255,.15); padding: 7px 10px; }
+  #boardWrap { position: relative; flex: 1; width: 100%; max-width: var(--bw, 480px); min-height: 0; padding: 0 8px 8px; }
+  canvas {
+    display: block; width: 100%; height: 100%; touch-action: none;
+    border-radius: 22px; background: linear-gradient(180deg, rgba(120,190,255,.10), rgba(40,90,180,.06) 60%, rgba(0,0,0,.18));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.12), 0 10px 40px rgba(0,0,0,.35);
+  }
+  .overlay {
+    position: absolute; inset: 0 8px 8px; border-radius: 22px;
+    display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: rgba(8,16,40,.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    text-align: center; padding: 24px;
+  }
+  .overlay.show { display: flex; }
+  .overlay h2 { margin: 0; font-size: 34px; }
+  .overlay p { margin: 0; opacity: .8; font-size: 16px; line-height: 1.4; max-width: 300px; }
+  .overlay .row { display: flex; gap: 10px; }
+  .overlay .btn { padding: 12px 20px; font-size: 17px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div class="title">4096<small>BUBBLES</small></div>
+    <div class="stats">
+      <div class="stat"><b id="score">0</b><span>Score</span></div>
+      <div class="stat"><b id="best">0</b><span>Best</span></div>
+    </div>
+    <div style="display:flex;gap:6px">
+      <button class="btn ghost" id="soundBtn" aria-label="Toggle sound">🔊</button>
+      <button class="btn ghost" id="restartBtn" aria-label="Restart">↻</button>
+    </div>
+  </div>
+  <div id="boardWrap">
+    <canvas id="c"></canvas>
+    <div class="overlay" id="overOv">
+      <h2>Game over</h2>
+      <p id="overText"></p>
+      <button class="btn" id="againBtn">Play again</button>
+    </div>
+    <div class="overlay" id="winOv">
+      <h2>4096! 🎉</h2>
+      <p>You made the 4096 bubble.</p>
+      <div class="row">
+        <button class="btn" id="keepBtn">Keep going</button>
+        <button class="btn ghost" id="newBtn">New game</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  /* =====================================================================
+     Bubble 4096: launch soap bubbles, merge equal powers of two.
+     Sections: config · layout · look · state · sound · physics · aiming
+               · drawing · loop (battery aware) · UI
+     ===================================================================== */
+
+  // ---------- Config ----------
+  const NV = 36;                 // outline vertices per soft bubble
+  const VIS = 1.17;              // drawn size vs physics size (neighbours press flat like foam)
+  const MERGE_R = 1.24;          // equal bubbles merge once their films visibly touch
+  const BUOY = 330;              // upward float (× S)
+  const MIN_SPEED = 550, MAX_SPEED = 1900;   // slingshot launch speed range (× S)
+  const SUBSTEPS = 6;
+  const TRAY_MAX = 3;            // bubbles waiting in the launcher
+  const DANGER_LIMIT = 10;       // seconds below the red line before game over
+  const PULL_MIN = 18;           // px (× S) of pull before it counts as a slingshot
+  const TAP_MS = 350;            // shorter press without pull = tap to float
+  const FPS_ACTIVE = 60, FPS_CALM = 30;      // frame caps (saves battery on 120 Hz screens)
+  const MAX_DPR = 2;             // render resolution cap
+
+  const TAU = Math.PI * 2;
+  const COS = new Float32Array(NV), SIN = new Float32Array(NV);
+  for (let k = 0; k < NV; k++) { COS[k] = Math.cos(k / NV * TAU); SIN[k] = Math.sin(k / NV * TAU); }
+
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const $ = id => document.getElementById(id);
+
+  // ---------- Layout ----------
+  let W = 360, H = 640, S = 1, DPR = 1;
+  const launcher = { x: 0, y: 0 };
+  let dangerY = 0;
+
+  function layout() {
+    const bw = Math.min(window.innerWidth, window.innerHeight * 0.62, 520);
+    document.documentElement.style.setProperty('--bw', bw + 'px');
+    const r = canvas.getBoundingClientRect();
+    W = r.width; H = r.height;
+    DPR = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    S = W / 400;
+    launcher.x = W / 2;
+    launcher.y = H * 0.7;              // leaves a pull zone underneath
+    dangerY = launcher.y - 64 * S;
+    styleCache.clear();                // sizes changed: rebuild cached gradients and labels
+  }
+
+  // ---------- Bubble look (cached per value) ----------
+  const expOf = v => Math.round(Math.log2(v));
+  const radiusOf = v => S * (16.5 + 5.2 * expOf(v));
+  const HUES = [0, 200, 160, 45, 25, 340, 280, 120, 190, 300, 55, 0, 260, 15, 175];
+  const hueOf = v => HUES[expOf(v) % HUES.length];
+  const hasConic = typeof ctx.createConicGradient === 'function';
+  const styleCache = new Map();
+
+  function filmGradient(h, R) {
+    const g = ctx.createRadialGradient(-R * 0.2, -R * 0.25, R * 0.05, 0, 0, R * 1.05);
+    g.addColorStop(0, `hsla(${h},90%,85%,0.05)`);
+    g.addColorStop(0.6, `hsla(${h},85%,65%,0.16)`);
+    g.addColorStop(0.88, `hsla(${h},90%,60%,0.38)`);
+    g.addColorStop(1, `hsla(${h},95%,70%,0.6)`);
+    return g;
+  }
+
+  // Pre-rendered number label: drawing a sprite is much cheaper than stroking text every frame.
+  function labelSprite(v, h, r) {
+    const txt = String(v);
+    const fs = r * (txt.length <= 2 ? 0.8 : txt.length === 3 ? 0.64 : 0.5);
+    const font = `800 ${fs}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+    const c = document.createElement('canvas');
+    const g = c.getContext('2d');
+    g.font = font;
+    const w = Math.ceil(g.measureText(txt).width + fs * 0.4), hh = Math.ceil(fs * 1.4);
+    c.width = Math.ceil(w * DPR); c.height = Math.ceil(hh * DPR);
+    g.scale(DPR, DPR);
+    g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+    g.lineWidth = fs * 0.16;
+    g.strokeStyle = `hsla(${h},70%,28%,.85)`; g.strokeText(txt, w / 2, hh / 2);
+    g.fillStyle = '#fff'; g.fillText(txt, w / 2, hh / 2);
+    return { img: c, w, h: hh, dy: fs * 0.04 };
+  }
+
+  function styleOf(v) {
+    let st = styleCache.get(v);
+    if (st) return st;
+    const h = hueOf(v), r = radiusOf(v);
+    st = {
+      h,
+      film: filmGradient(h, r * VIS),
+      glow: `hsla(${h},90%,70%,.12)`,
+      spark: `hsl(${h} 100% ${expOf(v) === 12 ? 87 : 80}%)`,
+      label: labelSprite(v, h, r),
+    };
+    if (hasConic) {        // built once at angle 0; the swirl is done by rotating the canvas
+      const g = ctx.createConicGradient(0, 0, 0);
+      g.addColorStop(0, `hsla(${h},95%,65%,.95)`);
+      g.addColorStop(0.2, `hsla(${h + 70},95%,72%,.8)`);
+      g.addColorStop(0.35, 'rgba(255,255,255,.95)');
+      g.addColorStop(0.55, `hsla(${h - 60},95%,70%,.8)`);
+      g.addColorStop(0.8, `hsla(${h + 140},90%,72%,.6)`);
+      g.addColorStop(1, `hsla(${h},95%,65%,.95)`);
+      st.rim = g;
+    }
+    styleCache.set(v, st);
+    return st;
+  }
+
+  // ---------- State ----------
+  let bubbles = [], tray = [], particles = [], floaters = [];
+  let held = null;                         // tray bubble being aimed
+  const holdPos = { x: 0, y: 0 };
+  let spawnSide = 0, spawnTimer = 0;
+  let score = 0, best = 0, maxVal = 2;
+  let running = false, paused = true, won = false;
+  let dangerTime = 0, lastTick = 0, cooldown = 0, simTime = 0;
+
+  try { best = +localStorage.getItem('bubble4096-best') || 0; } catch (e) {}
+  $('best').textContent = best;
+
+  function makeBubble(v, x, y, vx = 0, vy = 0, energy = 0) {
+    return { v, x, y, vx, vy, r: radiusOf(v), energy, age: 0, pulse: 0, dead: false, inTray: false,
+      wob: new Float32Array(NV), wv: new Float32Array(NV), phase: Math.random() * TAU, planes: [] };
+  }
+
+  // Launch values: the pool grows slowly with the biggest bubble on the board.
+  function pickValue() {
+    const top = Math.max(3, Math.min(6, expOf(maxVal) - 3));
+    let total = 0;
+    for (let e = 1; e <= top; e++) total += e ** -1.25;
+    let t = Math.random() * total;
+    for (let e = 1; e <= top; e++) { t -= e ** -1.25; if (t <= 0) return 2 ** e; }
+    return 2;
+  }
+
+  function spawnTray(fromLeft) {
+    const v = pickValue(), r = radiusOf(v);
+    const b = makeBubble(v, fromLeft ? r : W - r, launcher.y + (Math.random() - 0.5) * 20 * S,
+      (fromLeft ? 1 : -1) * (520 + Math.random() * 160) * S, (Math.random() - 0.5) * 60 * S, 0.3);
+    b.inTray = true;
+    tray.push(b);
+  }
+
+  function newGame() {
+    layout();
+    bubbles = []; tray = []; particles = []; floaters = [];
+    held = null; aiming = false;
+    score = 0; maxVal = 2; won = false;
+    dangerTime = 0; lastTick = 0; cooldown = 0; spawnTimer = 0;
+    spawnTray(true); spawnTray(false); spawnTray(true);
+    tray[2].x = launcher.x; tray[2].vx = 0;
+    spawnSide = 1;
+    [2, 4, 8, 2, 16].forEach((v, i) => {
+      bubbles.push(makeBubble(v, W * (0.15 + 0.17 * i), 40 * S + Math.random() * 30 * S));
+      maxVal = Math.max(maxVal, v);
+    });
+    addScore(0);
+    running = true; paused = false;
+    ['overOv', 'winOv'].forEach(id => $(id).classList.remove('show'));
+    wake();
+  }
+
+  function addScore(n) {
+    score += n;
+    $('score').textContent = score;
+    if (score > best) {
+      best = score;
+      $('best').textContent = best;
+      try { localStorage.setItem('bubble4096-best', best); } catch (e) {}
+    }
+  }
+
+  function gameOver() {
+    running = false; paused = true; aiming = false; held = null;
+    $('overText').textContent = `Score ${score} · biggest bubble ${maxVal}`;
+    $('overOv').classList.add('show');
+    blip(160, 0.4, 'sawtooth', 0.08);
+  }
+
+  // ---------- Sound ----------
+  let audio = null, soundOn = true;
+  function initAudio() {
+    if (audio) return;
+    try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { audio = null; }
+  }
+  function blip(freq, dur = 0.12, type = 'sine', vol = 0.15) {
+    if (!soundOn || !audio || audio.state !== 'running') return;
+    try {
+      const t = audio.currentTime;
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.type = type;
+      o.frequency.setValueAtTime(freq, t);
+      o.frequency.exponentialRampToValueAtTime(freq * 1.8, t + dur);
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      o.connect(g).connect(audio.destination);
+      o.start(t); o.stop(t + dur + 0.02);
+    } catch (e) {}
+  }
+
+  // ---------- Soft-body wobble ----------
+  // Dent the outline along (nx, ny) and bulge it sideways.
+  function excite(b, nx, ny, amt) {
+    for (let k = 0; k < NV; k++) {
+      const d = COS[k] * nx + SIN[k] * ny;
+      b.wv[k] += amt * (0.5 - d * d);
+    }
+  }
+  function updateWobble(b, dt) {
+    const K = 260, C = 5.5, CPL = 120, o = b.wob, w = b.wv;
+    for (let k = 0; k < NV; k++) {
+      const l = o[(k + NV - 1) % NV], r = o[(k + 1) % NV];
+      w[k] += (-K * o[k] - C * w[k] + CPL * (l + r - 2 * o[k])) * dt;
+    }
+    for (let k = 0; k < NV; k++) o[k] = Math.max(-0.3, Math.min(0.3, o[k] + w[k] * dt));
+  }
+
+  // ---------- Physics ----------
+  // Fresh shots are lively (bouncy, little drag); energy fades as they settle.
+  const restitution = b => Math.min(0.92, 0.45 + 0.5 * b.energy);
+  const damping = b => Math.max(0.35, 2.4 - 2.1 * b.energy);
+  const massOf = b => (b.r / S) ** 3;      // volume-like: big numbers have far more inertia
+
+  function wallHit(b, nx, ny, speed, e) {
+    if (speed > 60 * S) excite(b, nx, ny, Math.min(4, speed / (90 * S)));
+    return -e;
+  }
+
+  function integrate(b, dt, drift = true) {
+    b.vy -= BUOY * S * dt * (1.15 - 0.035 * expOf(b.v));     // big bubbles rise a bit slower
+    if (drift) {                                             // lazy sway, like air currents
+      b.vx += Math.sin(simTime * 0.9 + b.phase) * 28 * S * dt;
+      b.vy += Math.cos(simTime * 0.7 + b.phase * 1.3) * 14 * S * dt;
+    }
+    const k = Math.exp(-damping(b) * dt);
+    b.vx *= k; b.vy *= k;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    const e = restitution(b);
+    if (b.x < b.r)     { b.x = b.r;     if (b.vx < 0) b.vx *= wallHit(b, -1, 0, -b.vx, e); }
+    if (b.x > W - b.r) { b.x = W - b.r; if (b.vx > 0) b.vx *= wallHit(b, 1, 0, b.vx, e); }
+    if (b.y < b.r)     { b.y = b.r;     if (b.vy < 0) b.vy *= wallHit(b, 0, -1, -b.vy, e); }
+    if (b.y > H - b.r) { b.y = H - b.r; if (b.vy > 0) b.vy *= wallHit(b, 0, 1, b.vy, e); }
+  }
+
+  // Launcher bubbles: gently pulled together under the launcher.
+  function integrateTray(b, dt) {
+    if (b === held) { b.x = holdPos.x; b.y = holdPos.y; b.vx = b.vy = 0; return; }
+    b.vx += ((launcher.x - b.x) * 7 + Math.sin(simTime * 1.3 + b.phase) * 30 * S) * dt;
+    b.vy += (launcher.y - b.y) * 16 * dt;
+    const k = Math.exp(-3.6 * dt);
+    b.vx *= k; b.vy *= k;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    if (b.x < b.r)     { b.x = b.r;     if (b.vx < 0) { excite(b, -1, 0, Math.min(3, -b.vx / (120 * S))); b.vx *= -0.5; } }
+    if (b.x > W - b.r) { b.x = W - b.r; if (b.vx > 0) { excite(b, 1, 0, Math.min(3, b.vx / (120 * S))); b.vx *= -0.5; } }
+    if (b.y > H - b.r) { b.y = H - b.r; if (b.vy > 0) b.vy *= -0.5; }
+  }
+
+  function merge(a, b, list) {
+    a.dead = b.dead = true;
+    const ma = massOf(a), mb = massOf(b), m = ma + mb, v = a.v * 2;
+    const nb = makeBubble(v,
+      (a.x * ma + b.x * mb) / m, (a.y * ma + b.y * mb) / m,
+      (a.vx * ma + b.vx * mb) / m, (a.vy * ma + b.vy * mb) / m - 120 * S, 0.4);
+    nb.pulse = 1;
+    for (let k = 0; k < NV; k++) nb.wv[k] = (Math.random() - 0.5) * 3;
+    nb.x = Math.min(Math.max(nb.x, nb.r), W - nb.r);
+    nb.y = Math.max(nb.y, nb.r);
+    nb.inTray = a.inTray;
+    if (held === a || held === b) held = nb;
+    list.push(nb);
+
+    addScore(v);
+    const col = styleOf(v).spark;
+    for (let i = 0; i < 14; i++) {
+      const ang = Math.random() * TAU, sp = (80 + Math.random() * 220) * S;
+      particles.push({ x: nb.x, y: nb.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+        life: 0.6, max: 0.6, r: (2 + Math.random() * 3) * S, col });
+    }
+    floaters.push({ x: nb.x, y: nb.y, text: '+' + v, life: 0.9 });
+    blip(300 + expOf(v) * 70, 0.14, 'sine', 0.18);
+    if (v > maxVal) {
+      maxVal = v;
+      if (v >= 4096 && !won) {
+        won = true;
+        setTimeout(() => { paused = true; $('winOv').classList.add('show'); }, 600);
+      }
+    }
+  }
+
+  // Soft contacts (partial push-apart so bubbles squish), bounce impulses, merging.
+  function collide(list) {
+    const n = list.length;
+    let merged = false;
+    for (let i = 0; i < n; i++) {
+      const a = list[i];
+      if (a.dead) continue;
+      for (let j = i + 1; j < n; j++) {
+        const b = list[j];
+        if (b.dead) continue;
+        let dx = b.x - a.x, dy = b.y - a.y;
+        const rr = a.r + b.r, d2 = dx * dx + dy * dy;
+        if (a.v === b.v && d2 < (rr * MERGE_R) ** 2) { merge(a, b, list); merged = true; break; }
+        if (d2 >= rr * rr) continue;
+        let d = Math.sqrt(d2);
+        if (d < 1e-4) { dx = 0.01; dy = 0; d = 0.01; }
+        const nx = dx / d, ny = dy / d;
+        const ia = 1 / massOf(a), ib = 1 / massOf(b), it = ia + ib;
+        const push = (rr - d) * 0.07;
+        a.x -= nx * push * ia / it; a.y -= ny * push * ia / it;
+        b.x += nx * push * ib / it; b.y += ny * push * ib / it;
+
+        const vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+        if (vn >= 0) continue;
+        if (-vn > 50 * S) {                       // lighter bubble wobbles more
+          const amt = Math.min(4, -vn / (100 * S));
+          excite(a, nx, ny, amt * ia / it * 2);
+          excite(b, -nx, -ny, amt * ib / it * 2);
+        }
+        const e = -vn > 35 * S ? Math.max(restitution(a), restitution(b)) : 0.05;  // resting contacts stay calm
+        const jimp = -(1 + e) * vn / it;
+        a.vx -= jimp * ia * nx; a.vy -= jimp * ia * ny;
+        b.vx += jimp * ib * nx; b.vy += jimp * ib * ny;
+        if (-vn > 110 * S) {                      // pass the bounce on: chain reactions through the pile
+          const share = Math.max(a.energy, b.energy) * 0.8;
+          a.energy = Math.max(a.energy, share * Math.min(1, 1.6 * ia / it));
+          b.energy = Math.max(b.energy, share * Math.min(1, 1.6 * ib / it));
+          blip(180 + Math.random() * 60, 0.05, 'triangle', 0.05);
+        }
+      }
+    }
+    return merged ? list.filter(b => !b.dead) : list;
+  }
+
+  function step(dt) {
+    const h = dt / SUBSTEPS;
+    for (let s = 0; s < SUBSTEPS; s++) {
+      for (const b of bubbles) integrate(b, h);
+      bubbles = collide(bubbles);
+      for (const b of tray) integrateTray(b, h);
+      tray = collide(tray);
+    }
+    simTime += dt;
+
+    for (const b of bubbles) { b.age += dt; b.energy *= Math.exp(-dt * 0.7); b.pulse *= Math.exp(-dt * 6); updateWobble(b, dt); }
+    for (const b of tray)    { b.age += dt; b.energy *= Math.exp(-dt * 1.5); b.pulse *= Math.exp(-dt * 6); updateWobble(b, dt); }
+
+    // keep the launcher stocked, alternating left and right
+    if (tray.length < TRAY_MAX) {
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) { spawnTray(spawnSide === 0); spawnSide ^= 1; spawnTimer = 0.25; }
+    } else spawnTimer = 0.15;
+
+    if (particles.length) {
+      for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.94; p.vy *= 0.94; p.life -= dt; }
+      particles = particles.filter(p => p.life > 0);
+    }
+    if (floaters.length) {
+      for (const f of floaters) { f.y -= 50 * S * dt; f.life -= dt; }
+      floaters = floaters.filter(f => f.life > 0);
+    }
+    cooldown = Math.max(0, cooldown - dt);
+
+    // danger: a settled bubble hanging below the red line runs the countdown
+    const inDanger = bubbles.some(b => b.age > 2 && b.y + b.r > dangerY && Math.hypot(b.vx, b.vy) < 90 * S);
+    dangerTime = inDanger ? dangerTime + dt : Math.max(0, dangerTime - dt * 2);
+    const left = Math.ceil(DANGER_LIMIT - dangerTime);
+    if (inDanger && left !== lastTick) { lastTick = left; blip(left <= 3 ? 880 : 660, 0.06, 'square', 0.05); }
+    if (!inDanger) lastTick = 0;
+    if (dangerTime >= DANGER_LIMIT) gameOver();
+  }
+
+  // ---------- Aiming (slingshot) ----------
+  let aiming = false, aimT = 0;
+  const aim = { x: 0, y: 0 }, aimStart = { x: 0, y: 0 };
+  const pullDist = () => Math.hypot(aim.x - aimStart.x, aim.y - aimStart.y);
+  const pullReady = () => pullDist() > PULL_MIN * S;
+
+  // Shoot opposite to the pull, always upward, power from pull length.
+  function aimVector() {
+    const dx = aimStart.x - aim.x, dy = Math.min(aimStart.y - aim.y, -10 * S);
+    const ang = Math.max(-1.35, Math.min(1.35, Math.atan2(dx, -dy)));
+    const power = Math.max(0, Math.min(1, (pullDist() - PULL_MIN * S) / (H * 0.24)));
+    const speed = (MIN_SPEED + (MAX_SPEED - MIN_SPEED) * power) * S;
+    return { vx: Math.sin(ang) * speed, vy: -Math.cos(ang) * speed, power };
+  }
+
+  let ghost = null;          // reused scratch bubble for the trajectory preview
+  const path = [];
+  function predictPath(v) {
+    if (!ghost) ghost = makeBubble(2, 0, 0);
+    Object.assign(ghost, { v: held.v, r: held.r, x: held.x, y: held.y, vx: v.vx, vy: v.vy, energy: 1 });
+    ghost.wv.fill(0);
+    path.length = 0;
+    const dt = 1 / 120;
+    for (let i = 0; i < 90; i++) {
+      integrate(ghost, dt, false);
+      ghost.energy *= Math.exp(-dt * 0.7);
+      if (i % 4 === 0) path.push(ghost.x, ghost.y);
+      if (bubbles.some(o => Math.hypot(o.x - ghost.x, o.y - ghost.y) < o.r + ghost.r)) { path.push(ghost.x, ghost.y); break; }
+    }
+    return path;
+  }
+
+  function nearestTray(p) {
+    let best = null, bd = Infinity;
+    for (const b of tray) { const d = Math.hypot(b.x - p.x, b.y - p.y) - b.r; if (d < bd) { bd = d; best = b; } }
+    return best;
+  }
+
+  function launch(gentle) {
+    const b = held;
+    held = null;
+    if (!b || b.dead || !running || paused || cooldown > 0) return;
+    const v = gentle ? { vx: 0, vy: -120 * S } : aimVector();
+    tray = tray.filter(t => t !== b);
+    Object.assign(b, { inTray: false, age: 0, vx: v.vx, vy: v.vy, energy: gentle ? 0.1 : 1 });
+    bubbles.push(b);
+    spawnTimer = Math.max(spawnTimer, 0.35);
+    cooldown = 0.12;
+    blip(520, 0.08, 'sine', 0.1);
+  }
+
+  function toLocal(e, out) {
+    const r = canvas.getBoundingClientRect();
+    out.x = e.clientX - r.left; out.y = e.clientY - r.top;
+  }
+  canvas.addEventListener('pointerdown', e => {
+    initAudio();
+    if (!running || paused) return;
+    canvas.setPointerCapture?.(e.pointerId);
+    toLocal(e, aim); aimStart.x = aim.x; aimStart.y = aim.y;
+    held = nearestTray(aim);
+    if (held) { holdPos.x = held.x; holdPos.y = held.y; }
+    aiming = true; aimT = performance.now();
+    e.preventDefault();
+    wake();
+  });
+  canvas.addEventListener('pointermove', e => { if (aiming) { toLocal(e, aim); e.preventDefault(); } });
+  canvas.addEventListener('pointerup', e => {
+    if (!aiming) return;
+    aiming = false;
+    toLocal(e, aim);
+    if (pullReady()) launch(false);                         // slingshot
+    else if (performance.now() - aimT < TAP_MS) launch(true); // quick tap: float straight up
+    else held = null;                                        // long press without pull: cancel
+  });
+  canvas.addEventListener('pointercancel', () => { aiming = false; held = null; });
+  document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+  document.addEventListener('gesturestart', e => e.preventDefault());
+
+  // ---------- Drawing ----------
+  // Flat "soap walls" where bubbles press on each other or on the board edges.
+  function computePlanes(list) {
+    for (const b of list) {
+      b.planes.length = 0;
+      const R = b.r * VIS;
+      if (b.x < R) b.planes.push(-1, 0, b.x);
+      if (W - b.x < R) b.planes.push(1, 0, W - b.x);
+      if (b.y < R) b.planes.push(0, -1, b.y);
+    }
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i], ra = a.r * VIS;
+      for (let j = i + 1; j < list.length; j++) {
+        const b = list[j], rb = b.r * VIS;
+        const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
+        if (d >= ra + rb || d < 0.01) continue;
+        const nx = dx / d, ny = dy / d;
+        const da = Math.max(ra * 0.25, Math.min(ra, (d * d + ra * ra - rb * rb) / (2 * d)));
+        const db = Math.max(rb * 0.25, Math.min(rb, d - da));
+        a.planes.push(nx, ny, da);
+        b.planes.push(-nx, -ny, db);
+      }
+    }
+  }
+
+  const rs = new Float32Array(NV), clamped = new Uint8Array(NV), px = new Float32Array(NV), py = new Float32Array(NV);
+  // Builds the squishy outline path (centred on 0,0): wobble + motion stretch, flattened by walls,
+  // with the free sides puffed out a little to keep roughly the same volume.
+  function outlinePath(b, R) {
+    const sp = Math.hypot(b.vx, b.vy);
+    const st = Math.min(0.18, sp / (3000 * S));
+    const cv = sp > 0 ? b.vx / sp : 1, sv = sp > 0 ? b.vy / sp : 0;
+    const planes = b.planes;
+    let area = 0;
+    for (let k = 0; k < NV; k++) {
+      const cs = COS[k] * cv + SIN[k] * sv;
+      let r = R * (1 + b.wob[k]) * (1 + st * (2 * cs * cs - 1));
+      clamped[k] = 0;
+      for (let p = 0; p < planes.length; p += 3) {
+        const dp = COS[k] * planes[p] + SIN[k] * planes[p + 1];
+        if (dp > 0.05) { const lim = planes[p + 2] / dp; if (r > lim) { r = lim; clamped[k] = 1; } }
+      }
+      rs[k] = r; area += r * r;
+    }
+    const target = NV * R * R;
+    const f = area < target ? Math.min(1.35, Math.sqrt(target / area)) : 1;
+    for (let k = 0; k < NV; k++) {
+      const r = clamped[k] ? rs[k] : rs[k] * f;
+      px[k] = COS[k] * r; py[k] = SIN[k] * r;
+    }
+    ctx.beginPath();
+    ctx.moveTo((px[NV - 1] + px[0]) / 2, (py[NV - 1] + py[0]) / 2);
+    for (let k = 0; k < NV; k++) {
+      const n = (k + 1) % NV;
+      ctx.quadraticCurveTo(px[k], py[k], (px[k] + px[n]) / 2, (py[k] + py[n]) / 2);
+    }
+    ctx.closePath();
+  }
+
+  function drawBubble(b, alpha, time) {
+    const st = styleOf(b.v);
+    const R = b.r * VIS * (1 + b.pulse * 0.1);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(b.x, b.y);
+    outlinePath(b, R);
+
+    // thin, mostly clear soap film
+    ctx.fillStyle = b.pulse > 0.005 ? filmGradient(st.h, R) : st.film;
+    ctx.fill();
+
+    // iridescent rim that slowly swirls
+    const rot = time / 1000 * 0.6 + b.phase;
+    ctx.lineWidth = Math.max(1.5, 2.6 * S);
+    if (st.rim) {
+      ctx.rotate(rot);              // rotates the gradient, not the already-built path
+      ctx.strokeStyle = st.rim; ctx.stroke();
+      ctx.rotate(-rot);
+    } else {
+      const g = ctx.createLinearGradient(-R * Math.cos(rot), -R * Math.sin(rot), R * Math.cos(rot), R * Math.sin(rot));
+      g.addColorStop(0, `hsla(${st.h},95%,65%,.95)`);
+      g.addColorStop(0.5, 'rgba(255,255,255,.9)');
+      g.addColorStop(1, `hsla(${st.h + 70},95%,70%,.8)`);
+      ctx.strokeStyle = g; ctx.stroke();
+    }
+    ctx.lineWidth = Math.max(3, 7 * S);
+    ctx.strokeStyle = st.glow; ctx.stroke();
+
+    // reflections
+    ctx.fillStyle = 'rgba(255,255,255,.55)';
+    ctx.beginPath(); ctx.ellipse(-R * 0.42, -R * 0.42, R * 0.28, R * 0.12, -0.75, 0, TAU); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.beginPath(); ctx.arc(-R * 0.62, -R * 0.12, R * 0.05, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, R * 0.8, 0.15 * Math.PI, 0.38 * Math.PI);
+    ctx.lineWidth = Math.max(1, 2 * S); ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(255,255,255,.3)'; ctx.stroke();
+
+    // number
+    const L = st.label;
+    ctx.drawImage(L.img, -L.w / 2, -L.h / 2 + L.dy, L.w, L.h);
+    ctx.restore();
+  }
+
+  function drawBackground(time) {
+    ctx.fillStyle = 'rgba(255,255,255,.06)';                  // ambient rising specks
+    for (let i = 0; i < 18; i++) {
+      const x = (i * 97.3) % W;
+      const y = H - (((time / 1000) * (20 + i * 3) * S + i * 53) % H);
+      ctx.beginPath(); ctx.arc(x, y, (1.5 + (i % 4)) * S, 0, TAU); ctx.fill();
+    }
+    const warn = Math.min(1, dangerTime / DANGER_LIMIT);      // red line, glowing as danger builds
+    ctx.save();
+    ctx.setLineDash([8 * S, 8 * S]);
+    ctx.lineWidth = 2 * S;
+    ctx.strokeStyle = `rgba(255,80,90,${0.35 + 0.65 * warn * (0.6 + 0.4 * Math.sin(time / 80))})`;
+    ctx.beginPath(); ctx.moveTo(10 * S, dangerY); ctx.lineTo(W - 10 * S, dangerY); ctx.stroke();
+    ctx.restore();
+    if (warn > 0) { ctx.fillStyle = `rgba(255,60,80,${0.12 * warn})`; ctx.fillRect(0, dangerY, W, H - dangerY); }
+  }
+
+  function drawPullHint(time) {
+    const t = (time / 1000) % 1.6 / 1.6;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,.18)';
+    ctx.lineWidth = 3 * S; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (let i = 0; i < 3; i++) {
+      const y = launcher.y + (78 + i * 18) * S;
+      ctx.globalAlpha = Math.max(0, 1 - Math.abs((t * 3) % 3 - i)) * 0.8 + 0.2;
+      ctx.beginPath();
+      ctx.moveTo(launcher.x - 12 * S, y - 6 * S); ctx.lineTo(launcher.x, y + 4 * S); ctx.lineTo(launcher.x + 12 * S, y - 6 * S);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.font = `700 ${11 * S}px -apple-system, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(255,255,255,.3)';
+    ctx.fillText('PULL DOWN · TAP TO FLOAT', launcher.x, launcher.y + 138 * S);
+    ctx.restore();
+  }
+
+  function drawAim() {
+    const v = aimVector();
+    ctx.save();
+    ctx.setLineDash([4 * S, 6 * S]); ctx.lineCap = 'round';                // slingshot band
+    ctx.lineWidth = 3 * S; ctx.strokeStyle = 'rgba(255,255,255,.35)';
+    ctx.beginPath(); ctx.moveTo(aimStart.x, aimStart.y); ctx.lineTo(aim.x, aim.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255,255,255,.25)';
+    ctx.beginPath(); ctx.arc(aimStart.x, aimStart.y, 6 * S, 0, TAU); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.beginPath(); ctx.arc(aim.x, aim.y, 9 * S, 0, TAU); ctx.fill();
+
+    const pts = predictPath(v), n = pts.length / 2;                       // trajectory dots
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    for (let i = 0; i < n; i++) {
+      ctx.globalAlpha = 1 - i / (n + 4);
+      ctx.beginPath(); ctx.arc(pts[i * 2], pts[i * 2 + 1], (3.2 - i * 0.08) * S, 0, TAU); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.beginPath();                                                       // power ring
+    ctx.lineWidth = 5 * S;
+    ctx.strokeStyle = `hsl(${120 - v.power * 120} 90% 60%)`;
+    ctx.arc(held.x, held.y, held.r * VIS + 7 * S, -Math.PI / 2 - v.power * Math.PI, -Math.PI / 2 + v.power * Math.PI);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawEffects() {
+    for (const p of particles) {
+      ctx.globalAlpha = p.life / p.max;
+      ctx.fillStyle = p.col;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
+    }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `800 ${18 * S}px -apple-system, sans-serif`;
+    ctx.fillStyle = '#fff';
+    for (const f of floaters) {
+      ctx.globalAlpha = Math.min(1, f.life * 2);
+      ctx.fillText(f.text, f.x, f.y - 10 * S);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawCountdown(time) {
+    const left = Math.max(0, DANGER_LIMIT - dangerTime), urgent = left <= 3;
+    const pw = 132 * S, ph = 34 * S, x = W / 2 - pw / 2, y = dangerY - ph - 10 * S;
+    const s = urgent ? 1 + 0.06 * Math.sin(time / 70) : 1;
+    ctx.save();
+    ctx.translate(W / 2, y + ph / 2); ctx.scale(s, s); ctx.translate(-W / 2, -(y + ph / 2));
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, pw, ph, ph / 2); else ctx.rect(x, y, pw, ph);
+    ctx.fillStyle = urgent ? 'rgba(200,30,50,.85)' : 'rgba(20,10,30,.75)'; ctx.fill();
+    ctx.lineWidth = 2 * S; ctx.strokeStyle = 'rgba(255,90,100,.9)'; ctx.stroke();
+    ctx.save(); ctx.clip();                                    // time-left bar
+    ctx.fillStyle = urgent ? 'rgba(255,255,255,.18)' : 'rgba(255,80,90,.35)';
+    ctx.fillRect(x, y, pw * (left / DANGER_LIMIT), ph);
+    ctx.restore();
+    ctx.fillStyle = '#fff';
+    ctx.font = `800 ${17 * S}px -apple-system, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(`⚠ ${left.toFixed(1)}s`, W / 2, y + ph / 2 + 1);
+    ctx.restore();
+  }
+
+  function draw(time) {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    drawBackground(time);
+    if (running && !aiming) drawPullHint(time);
+    if (aiming && held && running && !paused && pullReady()) drawAim();
+    computePlanes(bubbles);
+    for (const b of bubbles) drawBubble(b, 1, time);
+    drawEffects();
+    if (running && dangerTime > 0.05) drawCountdown(time);
+    if (running) {
+      computePlanes(tray);
+      for (const b of tray) drawBubble(b, (aiming && held && b !== held ? 0.5 : 1) * Math.min(1, 0.3 + b.age * 3), time);
+    }
+  }
+
+  // ---------- Loop (battery aware) ----------
+  // · runs only while a game is live and the page is visible; otherwise draws once and sleeps
+  // · capped at 60 fps (ProMotion screens would otherwise render 120), 30 fps when the board is calm
+  let rafId = 0, lastStep = 0;
+
+  function isCalm() {
+    if (aiming || particles.length || floaters.length || dangerTime > 0) return false;
+    const lim = 40 * S;
+    for (const b of bubbles) if (Math.abs(b.vx) + Math.abs(b.vy) > lim || b.energy > 0.15) return false;
+    for (const b of tray) if (Math.abs(b.vx) + Math.abs(b.vy) > lim) return false;
+    return true;
+  }
+
+  function frame(t) {
+    rafId = 0;
+    if (document.hidden) return;
+    const live = running && !paused;
+    const minGap = 1000 / (live && !isCalm() ? FPS_ACTIVE : FPS_CALM) - 2;
+    if (live && t - lastStep < minGap) { rafId = requestAnimationFrame(frame); return; }
+    const dt = Math.min((t - lastStep) / 1000, 1 / 30);
+    lastStep = t;
+    if (live) step(dt);
+    draw(t);
+    if (running && !paused) rafId = requestAnimationFrame(frame);
+  }
+
+  function wake() {
+    if (rafId) return;
+    lastStep = performance.now();
+    rafId = requestAnimationFrame(frame);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { audio?.suspend?.(); }
+    else { audio?.resume?.(); wake(); }
+  });
+
+  // ---------- UI ----------
+  $('againBtn').onclick = newGame;
+  $('newBtn').onclick = newGame;
+  $('restartBtn').onclick = () => { initAudio(); newGame(); };
+  $('keepBtn').onclick = () => { $('winOv').classList.remove('show'); paused = false; wake(); };
+  $('soundBtn').onclick = () => {
+    initAudio();
+    soundOn = !soundOn;
+    $('soundBtn').textContent = soundOn ? '🔊' : '🔇';
+  };
+
+  window.addEventListener('resize', () => {
+    const oldW = W, oldH = H;
+    layout();
+    const fx = W / oldW, fy = H / oldH;
+    for (const b of tray) { b.x *= fx; b.y *= fy; b.r = radiusOf(b.v); }
+    for (const b of bubbles) { b.x *= fx; b.y *= fy; b.r = radiusOf(b.v); b.vx *= fx; b.vy *= fy; }
+    wake();
+    if (!running || paused) draw(performance.now());
+  });
+
+  // Installable app: offline support + automatic updates (ignored where service workers aren't allowed)
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    try { navigator.serviceWorker.register('sw.js').catch(() => {}); } catch (e) {}
+  }
+
+  newGame();          // no start screen: straight into a game (sound unlocks on first touch)
+})();
+</script>
+</body>
+</html>

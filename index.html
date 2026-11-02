@@ -26,15 +26,9 @@
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     background: radial-gradient(120% 80% at 50% 0%, #1d3a7a 0%, #0f1f47 45%, #0b1530 100%);
   }
-  /* Installed (home-screen) app: iOS can report a viewport shorter than the screen,
-     leaving a dead band at the bottom. Size to the full screen height instead. */
-  @media (display-mode: standalone) {
-    #app {
-      bottom: auto;
-      height: 100vh; height: 100lvh;
-      padding-bottom: max(6px, calc(env(safe-area-inset-bottom) - 14px));
-    }
-  }
+  /* Installed app on iOS versions that give it a viewport shorter than the screen:
+     the page then stops above the home indicator, so no bottom safe-area padding is needed. */
+  .short-viewport #app { padding-bottom: 4px; }
   #hud {
     width: 100%; max-width: var(--bw, 480px);
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -70,6 +64,14 @@
   .overlay h2 { margin: 0; font-size: 34px; }
   .overlay p { margin: 0; opacity: .8; font-size: 16px; line-height: 1.4; max-width: 300px; }
   .overlay .row { display: flex; gap: 10px; }
+  /* Game over: keep the final board sharp and visible, message in a card near the bottom */
+  #overOv { background: rgba(8,16,40,.18); backdrop-filter: none; -webkit-backdrop-filter: none;
+    justify-content: flex-end; padding-bottom: 12%; }
+  #overOv .card { display: flex; flex-direction: column; align-items: center; gap: 12px;
+    background: rgba(10,20,50,.82); border: 1px solid rgba(255,255,255,.14); border-radius: 22px;
+    padding: 18px 26px 20px; box-shadow: 0 12px 40px rgba(0,0,0,.45);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  #overOv h2 { font-size: 28px; }
   .overlay .btn { padding: 12px 20px; font-size: 17px; }
 </style>
 </head>
@@ -88,10 +90,20 @@
   </div>
   <div id="boardWrap">
     <canvas id="c"></canvas>
+    <div class="overlay" id="confirmOv">
+      <h2>New game?</h2>
+      <p>Your current game will be lost.</p>
+      <div class="row">
+        <button class="btn" id="confirmYes">New game</button>
+        <button class="btn ghost" id="confirmNo">Keep playing</button>
+      </div>
+    </div>
     <div class="overlay" id="overOv">
-      <h2>Game over</h2>
-      <p id="overText"></p>
-      <button class="btn" id="againBtn">Play again</button>
+      <div class="card">
+        <h2>Game over</h2>
+        <p id="overText"></p>
+        <button class="btn" id="againBtn">Play again</button>
+      </div>
     </div>
     <div class="overlay" id="winOv">
       <h2>4096! 🎉</h2>
@@ -142,6 +154,10 @@
   let dangerY = 0;
 
   function layout() {
+    // iOS bug: some versions give home-screen apps a viewport shorter than the screen
+    const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+    document.documentElement.classList.toggle('short-viewport',
+      !!standalone && window.innerHeight < screen.height - 20);
     const bw = Math.min(window.innerWidth, window.innerHeight * 0.62, 520);
     document.documentElement.style.setProperty('--bw', bw + 'px');
     const r = canvas.getBoundingClientRect();
@@ -252,6 +268,7 @@
   }
 
   function newGame() {
+    clearSave();
     layout();
     bubbles = []; tray = []; particles = []; floaters = [];
     held = null; aiming = false;
@@ -266,7 +283,7 @@
     });
     addScore(0);
     running = true; paused = false;
-    ['overOv', 'winOv'].forEach(id => $(id).classList.remove('show'));
+    ['overOv', 'winOv', 'confirmOv'].forEach(id => $(id).classList.remove('show'));
     wake();
   }
 
@@ -280,7 +297,48 @@
     }
   }
 
+  // ---------- Save / resume ----------
+  // The game in progress is saved every couple of seconds and whenever the app is hidden,
+  // and restored on the next launch. Positions are stored relative to the board size.
+  const SAVE_KEY = 'bubble4096-save', SAVE_VERSION = 1;
+  let saveTimer = 0;
+  const packBubble = b => [b.v, +(b.x / W).toFixed(4), +(b.y / H).toFixed(4),
+    +(b.vx / S).toFixed(1), +(b.vy / S).toFixed(1), +b.energy.toFixed(3), +b.age.toFixed(2), +b.phase.toFixed(3)];
+  function unpackBubble([v, x, y, vx, vy, energy, age, phase], inTray) {
+    const b = makeBubble(v, x * W, y * H, vx * S, vy * S, energy);
+    b.age = age; b.phase = phase; b.inTray = inTray;
+    return b;
+  }
+
+  function saveGame() {
+    if (!running) return;
+    const state = { version: SAVE_VERSION, score, maxVal, won, dangerTime, spawnSide, simTime,
+      bubbles: bubbles.map(packBubble), tray: tray.map(packBubble) };
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch (e) {}
+  }
+  function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) {} }
+
+  function loadGame() {
+    let st;
+    try { st = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { return false; }
+    if (!st || st.version !== SAVE_VERSION || !Array.isArray(st.bubbles) || !Array.isArray(st.tray)) return false;
+    layout();
+    bubbles = st.bubbles.map(a => unpackBubble(a, false));
+    tray = st.tray.map(a => unpackBubble(a, true));
+    particles = []; floaters = [];
+    held = null; aiming = false;
+    score = 0; addScore(st.score | 0);
+    maxVal = st.maxVal || 2; won = !!st.won;
+    dangerTime = st.dangerTime || 0; spawnSide = st.spawnSide || 0; simTime = st.simTime || 0;
+    lastTick = 0; cooldown = 0; spawnTimer = 0; saveTimer = 0;
+    running = true; paused = false;
+    ['overOv', 'winOv', 'confirmOv'].forEach(id => $(id).classList.remove('show'));
+    wake();
+    return true;
+  }
+
   function gameOver() {
+    clearSave();
     running = false; paused = true; aiming = false; held = null;
     $('overText').textContent = `Score ${score} · biggest bubble ${maxVal}`;
     $('overOv').classList.add('show');
@@ -289,10 +347,23 @@
 
   // ---------- Sound ----------
   let audio = null, soundOn = true;
+  // iOS only lets web audio start inside a user gesture (reliably on touch *end*), and suspends it
+  // when the app goes to the background. So: create/resume on every gesture, and play a silent
+  // sample once to fully unlock it.
+  let audioUnlocked = false;
   function initAudio() {
-    if (audio) return;
-    try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { audio = null; }
+    try {
+      if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+      if (audio.state !== 'running') audio.resume().catch(() => {});
+      if (!audioUnlocked) {
+        const src = audio.createBufferSource();
+        src.buffer = audio.createBuffer(1, 1, 22050);
+        src.connect(audio.destination); src.start(0);
+        audioUnlocked = true;
+      }
+    } catch (e) {}
   }
+  ['pointerup', 'touchend', 'click'].forEach(ev => document.addEventListener(ev, initAudio, { passive: true }));
   function blip(freq, dur = 0.12, type = 'sine', vol = 0.15) {
     if (!soundOn || !audio || audio.state !== 'running') return;
     try {
@@ -469,6 +540,7 @@
       floaters = floaters.filter(f => f.life > 0);
     }
     cooldown = Math.max(0, cooldown - dt);
+    if ((saveTimer += dt) > 2) { saveTimer = 0; saveGame(); }
 
     // danger: a settled bubble hanging below the red line runs the countdown
     const inDanger = bubbles.some(b => b.age > 2 && b.y + b.r > dangerY && Math.hypot(b.vx, b.vy) < 90 * S);
@@ -811,14 +883,26 @@
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { audio?.suspend?.(); }
-    else { audio?.resume?.(); wake(); }
+    if (document.hidden) { saveGame(); audio?.suspend?.(); }
+    else wake();      // audio resumes on the next touch (iOS only allows it inside a gesture)
   });
 
   // ---------- UI ----------
   $('againBtn').onclick = newGame;
   $('newBtn').onclick = newGame;
-  $('restartBtn').onclick = () => { initAudio(); newGame(); };
+  // Restart asks first while a game is in progress (the game pauses meanwhile)
+  $('restartBtn').onclick = () => {
+    initAudio();
+    if (!running) { newGame(); return; }
+    paused = true; aiming = false; held = null;
+    saveGame();
+    $('confirmOv').classList.add('show');
+  };
+  $('confirmYes').onclick = () => { $('confirmOv').classList.remove('show'); newGame(); };
+  $('confirmNo').onclick = () => {
+    $('confirmOv').classList.remove('show');
+    if (!$('winOv').classList.contains('show')) { paused = false; wake(); }
+  };
   $('keepBtn').onclick = () => { $('winOv').classList.remove('show'); paused = false; wake(); };
   $('soundBtn').onclick = () => {
     initAudio();
@@ -841,7 +925,10 @@
     try { navigator.serviceWorker.register('sw.js').catch(() => {}); } catch (e) {}
   }
 
-  newGame();          // no start screen: straight into a game (sound unlocks on first touch)
+  window.addEventListener('pagehide', saveGame);
+
+  // no start screen: continue the saved game if there is one, otherwise start fresh
+  if (!loadGame()) newGame();
 })();
 </script>
 </body>

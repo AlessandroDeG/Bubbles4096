@@ -29,6 +29,9 @@
   /* Installed app on iOS versions that give it a viewport shorter than the screen:
      the page then stops above the home indicator, so no bottom safe-area padding is needed. */
   .short-viewport #app { padding-bottom: 4px; }
+  /* iOS starts home-screen apps with a page one status bar short and won't grow the viewport past
+     the page's height. A screen-tall page (100vh = full screen there) lets it expand to the full screen. */
+  @media (display-mode: standalone) { html, body { height: 100vh; } }
   #hud {
     width: 100%; max-width: var(--bw, 480px);
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -910,7 +913,7 @@
     $('soundBtn').textContent = soundOn ? '🔊' : '🔇';
   };
 
-  window.addEventListener('resize', () => {
+  function onResize() {
     const oldW = W, oldH = H;
     layout();
     const fx = W / oldW, fy = H / oldH;
@@ -918,7 +921,11 @@
     for (const b of bubbles) { b.x *= fx; b.y *= fy; b.r = radiusOf(b.v); b.vx *= fx; b.vy *= fy; }
     wake();
     if (!running || paused) draw(performance.now());
-  });
+  }
+  window.addEventListener('resize', onResize);
+  window.visualViewport?.addEventListener('resize', onResize);
+  // iOS may only grow an installed app to full height a moment after launch: re-measure then too
+  [300, 1000].forEach(ms => setTimeout(() => { if (canvas.getBoundingClientRect().height !== H) onResize(); }, ms));
 
   // Installable app: offline support + automatic updates (ignored where service workers aren't allowed)
   if ('serviceWorker' in navigator && location.protocol === 'https:') {

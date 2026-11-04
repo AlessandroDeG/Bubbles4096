@@ -13,6 +13,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <style>
+  :root { --bg: radial-gradient(120% 80% at 50% 0%, #1d3a7a 0%, #0f1f47 45%, #0b1530 100%); }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body {
     margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none;
@@ -24,14 +25,8 @@
     position: fixed; inset: 0;
     display: flex; flex-direction: column; align-items: center;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-    background: radial-gradient(120% 80% at 50% 0%, #1d3a7a 0%, #0f1f47 45%, #0b1530 100%);
+    background: var(--bg);
   }
-  /* Installed app on iOS versions that give it a viewport shorter than the screen:
-     the page then stops above the home indicator, so no bottom safe-area padding is needed. */
-  .short-viewport #app { padding-bottom: 4px; }
-  /* iOS starts home-screen apps with a page one status bar short and won't grow the viewport past
-     the page's height. A screen-tall page (100vh = full screen there) lets it expand to the full screen. */
-  @media (display-mode: standalone) { html, body { height: 100vh; } }
   #hud {
     width: 100%; max-width: var(--bw, 480px);
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -51,6 +46,7 @@
     background: #eef3ff; border-radius: 12px; padding: 8px 12px; font-size: 15px; font-family: inherit;
   }
   .btn.ghost { background: rgba(255,255,255,.1); color: #eef3ff; border: 1px solid rgba(255,255,255,.15); padding: 7px 10px; }
+  .actions { display: flex; gap: 6px; }
   #boardWrap { position: relative; flex: 1; width: 100%; max-width: var(--bw, 480px); min-height: 0; padding: 0 8px 8px; }
   canvas {
     display: block; width: 100%; height: 100%; touch-action: none;
@@ -64,21 +60,40 @@
     text-align: center; padding: 24px;
   }
   .overlay.show { display: flex; }
+  #rotateOv { position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
+    background: var(--bg); }
+  #rotateOv.show { display: flex; }
+  #rotateOv .phone { width: 46px; height: 80px; border: 4px solid #eef3ff; border-radius: 10px; opacity: .85;
+    animation: rotBack 1.8s ease-in-out infinite; }
+  @keyframes rotBack { 0%, 25% { transform: rotate(-90deg); } 60%, 100% { transform: rotate(0deg); } }
   .overlay h2 { margin: 0; font-size: 34px; }
   .overlay p { margin: 0; opacity: .8; font-size: 16px; line-height: 1.4; max-width: 300px; }
   .overlay .row { display: flex; gap: 10px; }
-  /* Game over: keep the final board sharp and visible, message in a card near the bottom */
-  #overOv { background: rgba(8,16,40,.18); backdrop-filter: none; -webkit-backdrop-filter: none;
+  /* Game over / milestone: keep the board sharp and visible, message in a card near the bottom */
+  #overOv, #winOv { background: rgba(8,16,40,.18); backdrop-filter: none; -webkit-backdrop-filter: none;
     justify-content: flex-end; padding-bottom: 12%; }
-  #overOv .card { display: flex; flex-direction: column; align-items: center; gap: 12px;
+  #overOv .card, #winOv .card { display: flex; flex-direction: column; align-items: center; gap: 12px;
     background: rgba(10,20,50,.82); border: 1px solid rgba(255,255,255,.14); border-radius: 22px;
     padding: 18px 26px 20px; box-shadow: 0 12px 40px rgba(0,0,0,.45);
     backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-  #overOv h2 { font-size: 28px; }
-  .overlay .btn { padding: 12px 20px; font-size: 17px; }
+  #overOv h2, #winOv h2 { font-size: 28px; }
+  .overlay .btn { padding: 12px 20px; font-size: 17px; white-space: nowrap; }
+
+  /* ---------- Fitting iPhone screens ---------- */
+  /* iOS starts home-screen apps with a page one status bar short and won't grow the viewport past
+     the page's height; a screen-tall page (100vh = full screen there) lets it expand. */
+  @media (display-mode: standalone) { html, body { height: 100vh; } }
+  /* Page reaches the bottom of the screen (home-screen app, Claude app, …): the board's bottom is only
+     the pull zone, so it can sit close to the home indicator, with corners following the screen's. */
+  .edge-to-edge #app { padding-bottom: max(2px, calc(env(safe-area-inset-bottom) - 30px)); }
+  .edge-to-edge #boardWrap { padding-bottom: 2px; }
+  .edge-to-edge canvas, .edge-to-edge .overlay { border-bottom-left-radius: 44px; border-bottom-right-radius: 44px; }
+  /* iOS versions that still give the app a short viewport: it stops above the home indicator anyway */
+  .short-viewport #app { padding-bottom: 4px; }
 </style>
 </head>
 <body>
+<div id="rotateOv" aria-label="Rotate your phone to portrait"><div class="phone"></div></div>
 <div id="app">
   <div id="hud">
     <div class="title">4096<small>BUBBLES</small></div>
@@ -86,7 +101,7 @@
       <div class="stat"><b id="score">0</b><span>Score</span></div>
       <div class="stat"><b id="best">0</b><span>Best</span></div>
     </div>
-    <div style="display:flex;gap:6px">
+    <div class="actions">
       <button class="btn ghost" id="soundBtn" aria-label="Toggle sound">🔊</button>
       <button class="btn ghost" id="restartBtn" aria-label="Restart">↻</button>
     </div>
@@ -109,11 +124,13 @@
       </div>
     </div>
     <div class="overlay" id="winOv">
-      <h2>4096! 🎉</h2>
-      <p>You made the 4096 bubble.</p>
-      <div class="row">
-        <button class="btn" id="keepBtn">Keep going</button>
-        <button class="btn ghost" id="newBtn">New game</button>
+      <div class="card">
+        <h2 id="winTitle">4096! 🎉</h2>
+        <p id="winText">You made the 4096 bubble.</p>
+        <div class="row">
+          <button class="btn" id="keepBtn">Keep going</button>
+          <button class="btn ghost" id="newBtn">New game</button>
+        </div>
       </div>
     </div>
   </div>
@@ -125,8 +142,8 @@
 
   /* =====================================================================
      Bubble 4096: launch soap bubbles, merge equal powers of two.
-     Sections: config · layout · look · state · sound · physics · aiming
-               · drawing · loop (battery aware) · UI
+     Sections: config · layout · look · state · save/resume · sound · wobble · physics
+               · aiming · drawing · loop (battery aware) · UI · rotation · boot
      ===================================================================== */
 
   // ---------- Config ----------
@@ -150,13 +167,22 @@
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
   const $ = id => document.getElementById(id);
+  const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  const showOv = (id, on = true) => $(id).classList.toggle('show', on);
+  const hideOverlays = () => ['overOv', 'winOv', 'confirmOv'].forEach(id => showOv(id, false));
 
   // ---------- Layout ----------
   let W = 360, H = 640, S = 1, DPR = 1;
   const launcher = { x: 0, y: 0 };
   let dangerY = 0;
 
+  // Does the page reach the bottom edge of the screen? (the home-indicator safe area is then > 0)
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding-bottom:env(safe-area-inset-bottom)';
+  document.body.appendChild(probe);
+
   function layout() {
+    document.documentElement.classList.toggle('edge-to-edge', parseFloat(getComputedStyle(probe).paddingBottom) > 0);
     // iOS bug: some versions give home-screen apps a viewport shorter than the screen
     const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
     document.documentElement.classList.toggle('short-viewport',
@@ -170,8 +196,8 @@
     canvas.height = Math.round(H * DPR);
     S = W / 400;
     launcher.x = W / 2;
-    launcher.y = H * 0.7;              // leaves a pull zone underneath
-    dangerY = launcher.y - 64 * S;
+    launcher.y = H * 0.75;             // launcher bubbles sit low, leaving a pull zone underneath
+    dangerY = H * 0.7 - 39 * S;       // just above the launcher bubbles, with a small gap
     styleCache.clear();                // sizes changed: rebuild cached gradients and labels
   }
 
@@ -196,7 +222,7 @@
   function labelSprite(v, h, r) {
     const txt = String(v);
     const fs = r * (txt.length <= 2 ? 0.8 : txt.length === 3 ? 0.64 : 0.5);
-    const font = `800 ${fs}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+    const font = `800 ${fs}px ${FONT}`;
     const c = document.createElement('canvas');
     const g = c.getContext('2d');
     g.font = font;
@@ -241,16 +267,20 @@
   const holdPos = { x: 0, y: 0 };
   let spawnSide = 0, spawnTimer = 0;
   let score = 0, best = 0, maxVal = 2;
-  let running = false, paused = true, won = false;
+  let running = false, paused = true, wonMax = 0;   // wonMax: highest milestone (4096, 8192, …) celebrated
   let dangerTime = 0, lastTick = 0, cooldown = 0, simTime = 0;
 
   try { best = +localStorage.getItem('bubble4096-best') || 0; } catch (e) {}
   $('best').textContent = best;
 
   function makeBubble(v, x, y, vx = 0, vy = 0, energy = 0) {
-    return { v, x, y, vx, vy, r: radiusOf(v), energy, age: 0, pulse: 0, dead: false, inTray: false,
+    const b = { v, e: expOf(v), x, y, vx, vy, r: 0, m: 0, energy, age: 0, pulse: 0, dead: false, inTray: false,
       wob: new Float32Array(NV), wv: new Float32Array(NV), phase: Math.random() * TAU, planes: [] };
+    sizeBubble(b);
+    return b;
   }
+  // radius and mass (volume-like: big numbers have far more inertia), cached; redone on resize
+  function sizeBubble(b) { b.r = radiusOf(b.v); b.m = (b.r / S) ** 3; }
 
   // Launch values: the pool grows slowly with the biggest bubble on the board.
   function pickValue() {
@@ -270,24 +300,30 @@
     tray.push(b);
   }
 
+  // Common setup for a fresh or resumed game
+  function startRound(state) {
+    layout();
+    bubbles = state.bubbles; tray = state.tray; particles = []; floaters = [];
+    held = null; aiming = false;
+    score = 0; addScore(state.score);
+    maxVal = state.maxVal; wonMax = state.wonMax;
+    dangerTime = state.dangerTime; spawnSide = state.spawnSide; simTime = state.simTime;
+    lastTick = 0; cooldown = 0; spawnTimer = 0; saveTimer = 0;
+    running = true; paused = false;
+    hideOverlays();
+    wake();
+  }
+  function pauseGame() { paused = true; aiming = false; held = null; saveGame(); }
+  function resumeGame() { paused = false; wake(); }
+
   function newGame() {
     clearSave();
     layout();
-    bubbles = []; tray = []; particles = []; floaters = [];
-    held = null; aiming = false;
-    score = 0; maxVal = 2; won = false;
-    dangerTime = 0; lastTick = 0; cooldown = 0; spawnTimer = 0;
+    tray = [];
     spawnTray(true); spawnTray(false); spawnTray(true);
     tray[2].x = launcher.x; tray[2].vx = 0;
-    spawnSide = 1;
-    [2, 4, 8, 2, 16].forEach((v, i) => {
-      bubbles.push(makeBubble(v, W * (0.15 + 0.17 * i), 40 * S + Math.random() * 30 * S));
-      maxVal = Math.max(maxVal, v);
-    });
-    addScore(0);
-    running = true; paused = false;
-    ['overOv', 'winOv', 'confirmOv'].forEach(id => $(id).classList.remove('show'));
-    wake();
+    const starters = [2, 4, 8, 2, 16].map((v, i) => makeBubble(v, W * (0.15 + 0.17 * i), 40 * S + Math.random() * 30 * S));
+    startRound({ bubbles: starters, tray, score: 0, maxVal: 16, wonMax: 0, dangerTime: 0, spawnSide: 1, simTime: 0 });
   }
 
   function addScore(n) {
@@ -315,7 +351,7 @@
 
   function saveGame() {
     if (!running) return;
-    const state = { version: SAVE_VERSION, score, maxVal, won, dangerTime, spawnSide, simTime,
+    const state = { version: SAVE_VERSION, score, maxVal, wonMax, dangerTime, spawnSide, simTime,
       bubbles: bubbles.map(packBubble), tray: tray.map(packBubble) };
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch (e) {}
   }
@@ -325,18 +361,12 @@
     let st;
     try { st = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { return false; }
     if (!st || st.version !== SAVE_VERSION || !Array.isArray(st.bubbles) || !Array.isArray(st.tray)) return false;
-    layout();
-    bubbles = st.bubbles.map(a => unpackBubble(a, false));
-    tray = st.tray.map(a => unpackBubble(a, true));
-    particles = []; floaters = [];
-    held = null; aiming = false;
-    score = 0; addScore(st.score | 0);
-    maxVal = st.maxVal || 2; won = !!st.won;
-    dangerTime = st.dangerTime || 0; spawnSide = st.spawnSide || 0; simTime = st.simTime || 0;
-    lastTick = 0; cooldown = 0; spawnTimer = 0; saveTimer = 0;
-    running = true; paused = false;
-    ['overOv', 'winOv', 'confirmOv'].forEach(id => $(id).classList.remove('show'));
-    wake();
+    layout();                                    // board size first: positions are stored relative to it
+    startRound({
+      bubbles: st.bubbles.map(a => unpackBubble(a, false)), tray: st.tray.map(a => unpackBubble(a, true)),
+      score: st.score | 0, maxVal: st.maxVal || 2, wonMax: st.wonMax || (st.won ? 4096 : 0),   // older saves had a won flag
+      dangerTime: st.dangerTime || 0, spawnSide: st.spawnSide || 0, simTime: st.simTime || 0,
+    });
     return true;
   }
 
@@ -344,7 +374,7 @@
     clearSave();
     running = false; paused = true; aiming = false; held = null;
     $('overText').textContent = `Score ${score} · biggest bubble ${maxVal}`;
-    $('overOv').classList.add('show');
+    showOv('overOv');
     blip(160, 0.4, 'sawtooth', 0.08);
   }
 
@@ -403,7 +433,6 @@
   // Fresh shots are lively (bouncy, little drag); energy fades as they settle.
   const restitution = b => Math.min(0.92, 0.45 + 0.5 * b.energy);
   const damping = b => Math.max(0.35, 2.4 - 2.1 * b.energy);
-  const massOf = b => (b.r / S) ** 3;      // volume-like: big numbers have far more inertia
 
   function wallHit(b, nx, ny, speed, e) {
     if (speed > 60 * S) excite(b, nx, ny, Math.min(4, speed / (90 * S)));
@@ -411,7 +440,7 @@
   }
 
   function integrate(b, dt, drift = true) {
-    b.vy -= BUOY * S * dt * (1.15 - 0.035 * expOf(b.v));     // big bubbles rise a bit slower
+    b.vy -= BUOY * S * dt * (1.15 - 0.035 * b.e);           // big bubbles rise a bit slower
     if (drift) {                                             // lazy sway, like air currents
       b.vx += Math.sin(simTime * 0.9 + b.phase) * 28 * S * dt;
       b.vy += Math.cos(simTime * 0.7 + b.phase * 1.3) * 14 * S * dt;
@@ -441,7 +470,7 @@
 
   function merge(a, b, list) {
     a.dead = b.dead = true;
-    const ma = massOf(a), mb = massOf(b), m = ma + mb, v = a.v * 2;
+    const ma = a.m, mb = b.m, m = ma + mb, v = a.v * 2;
     const nb = makeBubble(v,
       (a.x * ma + b.x * mb) / m, (a.y * ma + b.y * mb) / m,
       (a.vx * ma + b.vx * mb) / m, (a.vy * ma + b.vy * mb) / m - 120 * S, 0.4);
@@ -450,6 +479,7 @@
     nb.x = Math.min(Math.max(nb.x, nb.r), W - nb.r);
     nb.y = Math.max(nb.y, nb.r);
     nb.inTray = a.inTray;
+    if (nb.inTray) nb.age = 1;           // no fade-in: only newly arriving launcher bubbles fade in
     if (held === a || held === b) held = nb;
     list.push(nb);
 
@@ -461,14 +491,25 @@
         life: 0.6, max: 0.6, r: (2 + Math.random() * 3) * S, col });
     }
     floaters.push({ x: nb.x, y: nb.y, text: '+' + v, life: 0.9 });
-    blip(300 + expOf(v) * 70, 0.14, 'sine', 0.18);
-    if (v > maxVal) {
-      maxVal = v;
-      if (v >= 4096 && !won) {
-        won = true;
-        setTimeout(() => { paused = true; $('winOv').classList.add('show'); }, 600);
-      }
+    blip(300 + nb.e * 70, 0.14, 'sine', 0.18);
+    if (v > maxVal) maxVal = v;
+    if (v >= 4096 && v > wonMax) {        // every new milestone (4096, 8192, 16384, …) gets its own celebration
+      wonMax = v;
+      setTimeout(() => celebrate(v), 600);
     }
+  }
+
+  // ---------- Milestones ----------
+  const MILESTONE_EMOJI = { 4096: '🎉', 8192: '🚀', 16384: '🌟', 32768: '🌌', 65536: '👑' };
+  function celebrate(v) {
+    if (!running) return;
+    $('winTitle').textContent = `${v}! ${MILESTONE_EMOJI[v] || '🫧'}`;
+    $('winText').textContent = `You made the ${v} bubble!`;
+    pauseGame();
+    floaters = []; particles = [];
+    draw(performance.now());               // show the big bubble cleanly, without score pop-ups over it
+    showOv('winOv');
+    [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => blip(f, 0.18, 'sine', 0.16), i * 110));   // little fanfare
   }
 
   // Soft contacts (partial push-apart so bubbles squish), bounce impulses, merging.
@@ -488,7 +529,7 @@
         let d = Math.sqrt(d2);
         if (d < 1e-4) { dx = 0.01; dy = 0; d = 0.01; }
         const nx = dx / d, ny = dy / d;
-        const ia = 1 / massOf(a), ib = 1 / massOf(b), it = ia + ib;
+        const ia = 1 / a.m, ib = 1 / b.m, it = ia + ib;
         const push = (rr - d) * 0.07;
         a.x -= nx * push * ia / it; a.y -= ny * push * ia / it;
         b.x += nx * push * ib / it; b.y += ny * push * ib / it;
@@ -560,20 +601,21 @@
   const pullDist = () => Math.hypot(aim.x - aimStart.x, aim.y - aimStart.y);
   const pullReady = () => pullDist() > PULL_MIN * S;
 
-  // Shoot opposite to the pull, always upward, power from pull length.
+  // Slingshot: shoots opposite to the pull, in any direction (pull up to shoot backward/down).
+  // Full power is reachable with a sideways pull too, so wall shots can be full strength.
   function aimVector() {
-    const dx = aimStart.x - aim.x, dy = Math.min(aimStart.y - aim.y, -10 * S);
-    const ang = Math.max(-1.35, Math.min(1.35, Math.atan2(dx, -dy)));
-    const power = Math.max(0, Math.min(1, (pullDist() - PULL_MIN * S) / (H * 0.24)));
+    const dx = aimStart.x - aim.x, dy = aimStart.y - aim.y, len = Math.hypot(dx, dy) || 1;
+    const fullPull = Math.min(H * 0.24, W * 0.3);
+    const power = Math.max(0, Math.min(1, (pullDist() - PULL_MIN * S) / fullPull));
     const speed = (MIN_SPEED + (MAX_SPEED - MIN_SPEED) * power) * S;
-    return { vx: Math.sin(ang) * speed, vy: -Math.cos(ang) * speed, power };
+    return { vx: dx / len * speed, vy: dy / len * speed, power };
   }
 
   let ghost = null;          // reused scratch bubble for the trajectory preview
   const path = [];
   function predictPath(v) {
     if (!ghost) ghost = makeBubble(2, 0, 0);
-    Object.assign(ghost, { v: held.v, r: held.r, x: held.x, y: held.y, vx: v.vx, vy: v.vy, energy: 1 });
+    Object.assign(ghost, { v: held.v, e: held.e, r: held.r, m: held.m, x: held.x, y: held.y, vx: v.vx, vy: v.vy, energy: 1 });
     ghost.wv.fill(0);
     path.length = 0;
     const dt = 1 / 120;
@@ -759,17 +801,17 @@
     ctx.strokeStyle = 'rgba(255,255,255,.18)';
     ctx.lineWidth = 3 * S; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (let i = 0; i < 3; i++) {
-      const y = launcher.y + (78 + i * 18) * S;
+      const y = launcher.y + (62 + i * 16) * S;
       ctx.globalAlpha = Math.max(0, 1 - Math.abs((t * 3) % 3 - i)) * 0.8 + 0.2;
       ctx.beginPath();
       ctx.moveTo(launcher.x - 12 * S, y - 6 * S); ctx.lineTo(launcher.x, y + 4 * S); ctx.lineTo(launcher.x + 12 * S, y - 6 * S);
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
-    ctx.font = `700 ${11 * S}px -apple-system, sans-serif`;
+    ctx.font = `700 ${11 * S}px ${FONT}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(255,255,255,.3)';
-    ctx.fillText('PULL DOWN · TAP TO FLOAT', launcher.x, launcher.y + 138 * S);
+    ctx.fillText('PULL DOWN · TAP TO FLOAT', launcher.x, launcher.y + 112 * S);
     ctx.restore();
   }
 
@@ -807,7 +849,7 @@
       ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
     }
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = `800 ${18 * S}px -apple-system, sans-serif`;
+    ctx.font = `800 ${18 * S}px ${FONT}`;
     ctx.fillStyle = '#fff';
     for (const f of floaters) {
       ctx.globalAlpha = Math.min(1, f.life * 2);
@@ -831,7 +873,7 @@
     ctx.fillRect(x, y, pw * (left / DANGER_LIMIT), ph);
     ctx.restore();
     ctx.fillStyle = '#fff';
-    ctx.font = `800 ${17 * S}px -apple-system, sans-serif`;
+    ctx.font = `800 ${17 * S}px ${FONT}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(`⚠ ${left.toFixed(1)}s`, W / 2, y + ph / 2 + 1);
     ctx.restore();
@@ -897,28 +939,48 @@
   $('restartBtn').onclick = () => {
     initAudio();
     if (!running) { newGame(); return; }
-    paused = true; aiming = false; held = null;
-    saveGame();
-    $('confirmOv').classList.add('show');
+    pauseGame();
+    showOv('confirmOv');
   };
-  $('confirmYes').onclick = () => { $('confirmOv').classList.remove('show'); newGame(); };
+  $('confirmYes').onclick = newGame;
   $('confirmNo').onclick = () => {
-    $('confirmOv').classList.remove('show');
-    if (!$('winOv').classList.contains('show')) { paused = false; wake(); }
+    showOv('confirmOv', false);
+    if (!$('winOv').classList.contains('show')) resumeGame();
   };
-  $('keepBtn').onclick = () => { $('winOv').classList.remove('show'); paused = false; wake(); };
+  $('keepBtn').onclick = () => { showOv('winOv', false); resumeGame(); };
   $('soundBtn').onclick = () => {
     initAudio();
     soundOn = !soundOn;
     $('soundBtn').textContent = soundOn ? '🔊' : '🔇';
   };
 
+  // ---------- Rotation ----------
+  // iOS ignores orientation locks for web apps, so on a phone held sideways the game pauses
+  // behind a "rotate back" screen and the board is left untouched until portrait again.
+  const sideways = () => matchMedia('(pointer: coarse)').matches && window.innerWidth > window.innerHeight;
+  let rotLocked = false, rotPausedGame = false, bootPending = false;
+
   function onResize() {
+    if (sideways()) {
+      if (!rotLocked) {
+        rotLocked = true;
+        rotPausedGame = running && !paused;
+        if (rotPausedGame) pauseGame();
+        showOv('rotateOv');
+      }
+      return;
+    }
+    if (rotLocked) {
+      rotLocked = false;
+      showOv('rotateOv', false);
+      if (rotPausedGame) paused = false;            // the board is re-measured below, then the loop wakes
+    }
+    if (bootPending) { bootPending = false; boot(); return; }
     const oldW = W, oldH = H;
     layout();
     const fx = W / oldW, fy = H / oldH;
-    for (const b of tray) { b.x *= fx; b.y *= fy; b.r = radiusOf(b.v); }
-    for (const b of bubbles) { b.x *= fx; b.y *= fy; b.r = radiusOf(b.v); b.vx *= fx; b.vy *= fy; }
+    for (const b of tray) { b.x *= fx; b.y *= fy; sizeBubble(b); }
+    for (const b of bubbles) { b.x *= fx; b.y *= fy; b.vx *= fx; b.vy *= fy; sizeBubble(b); }
     wake();
     if (!running || paused) draw(performance.now());
   }
@@ -934,8 +996,12 @@
 
   window.addEventListener('pagehide', saveGame);
 
-  // no start screen: continue the saved game if there is one, otherwise start fresh
-  if (!loadGame()) newGame();
+  // ---------- Boot ----------
+  // No start screen: continue the saved game if there is one, otherwise start fresh
+  // (held sideways at launch: wait for portrait so the board is measured correctly).
+  function boot() { if (!loadGame()) newGame(); }
+  if (sideways()) { bootPending = true; rotLocked = true; showOv('rotateOv'); }
+  else boot();
 })();
 </script>
 </body>
